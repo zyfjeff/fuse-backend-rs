@@ -10,6 +10,8 @@
 
 use std::convert::TryInto;
 use std::io;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::abi::fuse_abi as fuse;
@@ -378,7 +380,7 @@ pub trait ZeroCopyWriter: io::Write {
 }
 
 /// Additional context associated with requests.
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct Context {
     /// The user ID of the calling process.
     pub uid: libc::uid_t,
@@ -388,6 +390,9 @@ pub struct Context {
 
     /// The thread group ID of the calling process.
     pub pid: libc::pid_t,
+
+    /// Whether the current request was canceled
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl Context {
@@ -403,6 +408,7 @@ impl From<&fuse::InHeader> for Context {
             uid: source.uid,
             gid: source.gid,
             pid: source.pid as i32,
+            cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }

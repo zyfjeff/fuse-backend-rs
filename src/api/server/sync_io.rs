@@ -50,6 +50,11 @@ impl<F: FileSystem + Sync> Server<F> {
             return ctx.reply_error_explicit(io::Error::from_raw_os_error(libc::ENOMEM));
         }
 
+        let mut guard = self.inflight_io.lock().unwrap();
+        let res = guard.insert(in_header.unique, ctx.context().cancel.clone());
+        assert!(res.is_none());
+        drop(guard);
+
         trace!(
             "fuse: new req {:?}: {:?}",
             Opcode::from(in_header.opcode),
@@ -107,10 +112,7 @@ impl<F: FileSystem + Sync> Server<F> {
             x if x == Opcode::RemoveMapping as u32 => self.removemapping(ctx, vu_req),
             // Group reqeusts don't need reply together
             x => match x {
-                x if x == Opcode::Interrupt as u32 => {
-                    self.interrupt(ctx);
-                    Ok(0)
-                }
+                x if x == Opcode::Interrupt as u32 => self.interrupt(ctx),
                 x if x == Opcode::Destroy as u32 => {
                     self.destroy(ctx);
                     Ok(0)
@@ -118,7 +120,9 @@ impl<F: FileSystem + Sync> Server<F> {
                 _ => ctx.reply_error(io::Error::from_raw_os_error(libc::ENOSYS)),
             },
         };
-
+        let mut guard = self.inflight_io.lock().unwrap();
+        guard.remove(&in_header.unique);
+        drop(guard);
         // Pass `None` because current API handler's design does not allow us to catch
         // the `out_header`. Hopefully, we can reach to `out_header` after some
         // refactoring work someday.
@@ -943,7 +947,17 @@ impl<F: FileSystem + Sync> Server<F> {
         }
     }
 
-    pub(super) fn interrupt<S: BitmapSlice>(&self, _ctx: SrvContext<'_, F, S>) {}
+    pub(super) fn interrupt<S: BitmapSlice>(&self, mut ctx: SrvContext<'_, F, S>) -> Result<usize> {
+        let InterruptIn { unique } = ctx.r.read_obj().map_err(Error::DecodeMessage)?;
+
+        let mut guard = self.inflight_io.lock().unwrap();
+
+        guard.get_mut(&unique).map(|cancel| {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        Ok(0)
+    }
 
     pub(super) fn bmap<S: BitmapSlice>(&self, mut ctx: SrvContext<'_, F, S>) -> Result<usize> {
         let BmapIn {

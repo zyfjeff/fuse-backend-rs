@@ -16,11 +16,13 @@
 //! The Fuse API server is performance critical, so it's designed to support multi-threading by
 //! adopting interior-mutability. And the arcswap crate is used to implement interior-mutability.
 
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::io::{self, Read};
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
 
@@ -51,6 +53,7 @@ pub const MAX_REQ_PAGES: u16 = 256; // 1MB
 pub struct Server<F: FileSystem + Sync> {
     fs: F,
     vers: ArcSwap<ServerVersion>,
+    inflight_io: Mutex<HashMap<u64, Arc<AtomicBool>>>,
 }
 
 impl<F: FileSystem + Sync> Server<F> {
@@ -62,6 +65,7 @@ impl<F: FileSystem + Sync> Server<F> {
                 major: KERNEL_VERSION,
                 minor: KERNEL_MINOR_VERSION,
             })),
+            inflight_io: Mutex::new(HashMap::default()),
         }
     }
 }
